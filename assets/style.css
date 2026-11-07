@@ -1,0 +1,42 @@
+/* Native GTK3 CSS: no browser-only effects. */
+window, dialog { background-color: #13151d; color: #eef1fa; }
+headerbar { background: #191c27; color: #eef1fa; border-bottom: 1px solid #303544; }
+.brand { font-size: 1.25em; font-weight: bold; letter-spacing: 0.3px; }
+.navigation { background: #191c27; border-radius: 9px; padding: 4px; }
+.navigation button { border: 0; box-shadow: none; background: transparent; color: #aeb8ce; padding: 8px 14px; }
+.navigation button:checked { background: #343454; color: #e6e5ff; border-radius: 6px; }
+.page-title { font-size: 2em; font-weight: bold; color: #f2f3ff; }
+.eyebrow { font-size: 0.77em; font-weight: bold; letter-spacing: 1.5px; color: #aba6f8; }
+.muted { color: #b1bace; }
+.small { font-size: 0.85em; }
+.hero { background: #1c2030; border: 1px solid #33394d; border-radius: 12px; padding: 20px; }
+.hero-title { font-size: 1.3em; font-weight: bold; }
+entry.search { border: 1px solid #3c435c; background: #202432; color: #f3f4fc; border-radius: 8px; padding: 10px 12px; font-size: 1em; }
+entry.search:focus { border-color: #a095ef; box-shadow: 0 0 0 1px #a095ef; }
+flowbox { background: transparent; }
+flowboxchild { padding: 0; background: transparent; }
+.app-card { background-image: none; background-color: #202431; color: #eef1fa;
+  border: 1px solid #343b4e; border-radius: 8px; padding: 12px; box-shadow: none;
+  transition: background-color 150ms ease, border-color 150ms ease, box-shadow 150ms ease; }
+.app-card:hover { background-color: #2a3043; border-color: #7f85d5; box-shadow: 0 2px 9px alpha(#8584ed, 0.18); }
+.app-card:focus { border-color: #b9b1ff; outline: 2px solid #b9b1ff; outline-offset: -3px; }
+.app-card:active { background-color: #363953; }
+.app-name { font-size: 1em; font-weight: bold; }
+.app-id { color: #bcc5d7; font-size: 0.85em; }
+.badge { color: #fff; padding: 3px 8px; border-radius: 5px; font-weight: bold; font-size: 0.77em; }
+.badge-flatpak { background: #3a60c1; }
+.badge-snap { background: #ff5c2b; color: #17191f; }
+.badge-appimage { background: #5c3091; }
+.badge-deb { background: #0d8253; }
+.badge-local { background: #c42944; }
+.backend-pill { color: #c4cce0; background: #232838; border: 1px solid #373f54; border-radius: 6px; padding: 5px 9px; font-size: 0.77em; }
+.backend-unavailable { color: #e9bf9a; border-color: #7f5f48; }
+.status-panel { background: #1c2130; border: 1px solid #354057; border-radius: 8px; padding: 10px 14px; }
+.activity-card { background: #202431; border: 1px solid #343b4e; border-radius: 8px; padding: 16px; }
+.success { color: #8cdbb7; }
+.warning { color: #f3c99b; }
+.error { color: #ffacb9; }
+.details { background: #191e2a; border-radius: 8px; padding: 14px; }
+button.suggested-action { background: #6961bf; color: #fff; border-color: #8d83e2; }
+button.destructive-action { background: #a82a45; color: #fff; border-color: #dc6176; }
+textview, textview text { background: #191e2a; color: #e3e8f5; }
