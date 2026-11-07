@@ -112,19 +112,21 @@ class FlatpakBackend(Backend):
 
     def discover(self):
         if not self.capability().available:
-            return ()
+            raise BackendError("Flatpak is unavailable; installed applications cannot be verified")
         output = command(["flatpak", "list", "--app", "--columns=ref,name,installation"]).stdout
         apps = []
         for line in output.splitlines():
+            if not line.strip():
+                continue
             fields = line.split("\t")
             if len(fields) != 3:
-                continue
+                raise BackendError("Flatpak returned incomplete inventory; no absence can be verified")
             ref, name, scope = fields
             bits = ref.removeprefix("app/").split("/")
             if len(bits) != 3 or not all(COMPONENT.fullmatch(bit) for bit in bits):
-                continue
+                raise BackendError("Flatpak returned an invalid application reference")
             if scope not in {"user", "system"} and not COMPONENT.fullmatch(scope):
-                continue
+                raise BackendError("Flatpak returned an unrecognized installation name")
             identifier, arch, branch = bits
             apps.append(Application(
                 f"flatpak:{scope}:{'/'.join(bits)}", self.key, name or identifier,
@@ -199,11 +201,13 @@ class SnapBackend(Backend):
             connection.close()
 
     def capability(self):
+        if not Path("/run/snapd.socket").exists() and not shutil.which("snap"):
+            return Capability(False, False, "Snap is not installed")
         try:
             self.request("GET", "/v2/system-info")
             return Capability(True, True, "snapd available; native PolicyKit authentication")
         except Exception as error:
-            return Capability(False, False, str(error))
+            return Capability(False, False, str(error), scan_failed=True)
 
     def discover(self):
         if not Path("/run/snapd.socket").exists():

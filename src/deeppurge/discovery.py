@@ -29,8 +29,8 @@ class DesktopEntry:
 
 def application_directories():
     roots = [xdg_path("XDG_DATA_HOME", ".local/share")]
-    roots.extend(Path(value) for value in os.environ.get(
-        "XDG_DATA_DIRS", "/usr/local/share:/usr/share").split(":")
+    roots.extend(Path(value) for value in (
+        os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share").split(":")
                  if value and Path(value).is_absolute())
     # Export fallbacks cover desktops that have not yet updated XDG_DATA_DIRS.
     roots.extend((xdg_path("XDG_DATA_HOME", ".local/share") / "flatpak/exports/share",
@@ -40,8 +40,12 @@ def application_directories():
 
 def desktop_files(directory):
     """Traverse application directories only, with depth/count bounds, no links."""
+    if not directory.exists():
+        return
+    def unreadable(error):
+        raise error
     count = 0
-    for root, directories, files in os.walk(directory, followlinks=False):
+    for root, directories, files in os.walk(directory, followlinks=False, onerror=unreadable):
         if len(Path(root).relative_to(directory).parts) >= 6:
             directories[:] = []
         else:
@@ -161,7 +165,8 @@ def reconcile(backend_apps, entries, owners):
             except (OSError, ValueError, RuntimeError):
                 pass
             app = Application(key, "appimage", entry.name, executable.name, "AppImage",
-                              scope="user file", icon=entry.icon, launchers=(entry.path,),
+                              scope="user file" if identity else "unverified image",
+                              icon=entry.icon, launchers=(entry.path,),
                               executable=executable, identity=identity)
             if old := result.get(key):
                 app = replace(old, launchers=tuple(dict.fromkeys(old.launchers + app.launchers)))
@@ -198,12 +203,14 @@ def scan(registry):
                 else:
                     capability, records = future.result()
                     capabilities[key] = capability
+                    if capability.scan_failed:
+                        warnings.append(f"{key}: {capability.detail}")
                     apps.extend(records)
             except Exception as error:
                 LOG.exception("%s discovery failed", key)
                 warnings.append(f"{key}: {error}")
                 if key != "desktop":
-                    capabilities[key] = Capability(False, False, str(error))
+                    capabilities[key] = Capability(False, False, str(error), scan_failed=True)
     for key in ("appimage", "local"):
         capabilities[key] = registry[key].capability()
     try:

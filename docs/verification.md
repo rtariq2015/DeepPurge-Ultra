@@ -3,13 +3,15 @@
 Verified on November 7, 2026 in `/home/home/DeepPurge-Ultra` on Zorin OS 18.1
 (Ubuntu noble base), Python 3.12.3, GTK 3.24, Flatpak 1.14.6, snapd 2.77.1
 and PackageKit 1.2.8 with its APT backend.
+Current reviewed version: **0.2.1**. The findings, reproductions and selected
+fix batch are in [the engineering review](review-2026-11-07.md).
 
 ## Completed checks
 
-- **36 tests passed**, including all opt-in native and GTK checks, with
+- **53 tests passed**, including all opt-in native and GTK checks, with
   `G_DEBUG=fatal-criticals` enabled for the final run.
 - Python compilation and `desktop-file-validate` completed successfully.
-- Live inventory returned 101 application records across APT/Deb, Flatpak, Snap,
+- Live inventory returned 100 application records across APT/Deb, Flatpak, Snap,
   AppImage and local entries, with no discovery warnings at verification time.
 - PackageKit advertised APT removal and resolve roles. Its asynchronous native
   removal simulation for the installed `baobab` package completed successfully;
@@ -28,15 +30,27 @@ and PackageKit 1.2.8 with its APT backend.
   reporting, disabled Snap revisions, partially installed Debian packages,
   filesystem boundaries, foreign ownership, symlink parents and leaf links,
   changed file identities, Trash refusal and operation-lock behavior.
+- Review regressions cover unavailable/malformed Flatpak inventory blocking
+  absence verification and shared-data selection, corrupt UTF-8 Activity,
+  atomic history writes without truncating an unrelated hardlink, rejection
+  of FIFO/shared state files, empty XDG search paths, unreadable desktop roots,
+  failed capability probes, preservation of backend results when history fails,
+  and correct distinction between operation-lock contention and backend I/O.
 - GTK checks cover stylesheet loading, missing icons, long names, search, format
   filtering, reverse sorting, empty results, keyboard focus shortcuts, refresh
   generation handling, busy-window closure, cancelled uninstall previews,
   unchecked personal-data cleanup and growth under larger accessibility fonts.
-- Six real GTK screenshots were captured and visually inspected, covering wide
+- Additional GTK checks cover failed/partial scan states, retry after failed
+  refresh, and actual card/notice allocations after resizing and replacing data.
+- Seven real GTK screenshots were captured and visually inspected, covering wide
   and narrow grids, increased text size, uninstall details, empty search and
-  Activity. Captures use documented fixture inventory to protect the user's
+  Activity, plus an incomplete-scan notice. Public captures use documented fixture inventory to protect the user's
   application list. The final capture pass also completed with
   `G_DEBUG=fatal-criticals`, without GTK critical errors.
+- The actual application was separately launched against live package backends.
+  Its 100 identity keys were unique, with no discovery warnings. A real Flatpak
+  details view was prepared and cancelled before any uninstall. Live captures
+  are kept under ignored `artifacts/local/` rather than published to GitHub.
 
 ## Commands
 
@@ -61,6 +75,8 @@ is still needed for those paths. Snap status/error behavior and cancellation
 classification are covered by adapter tests; this is not a substitute for a full
 snapd removal test. Named Flatpak system installations and external AppImage
 integration have not been exercised on this machine.
+Cross-filesystem Trash behavior on removable/network storage also remains
+unverified; unsupported Trash operations continue to retain paths and report errors.
 
 User-data associations are deliberately narrow. Unknown application data,
 Debian configuration files, existing Snap snapshots, shared vendor directories

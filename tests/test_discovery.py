@@ -5,11 +5,38 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from deeppurge.discovery import DesktopEntry, application_directories, reconcile, scan_desktops
-from deeppurge.models import Application
+from deeppurge.discovery import DesktopEntry, application_directories, reconcile, scan, scan_desktops
+from deeppurge.models import Application, Capability
 
 
 class DiscoveryTests(unittest.TestCase):
+    def test_empty_xdg_data_dirs_uses_specification_defaults(self):
+        with patch.dict(os.environ, {'XDG_DATA_DIRS': ''}):
+            directories = application_directories()
+        self.assertIn(Path('/usr/local/share/applications'), directories)
+        self.assertIn(Path('/usr/share/applications'), directories)
+
+    def test_unreadable_desktop_directory_is_not_silently_empty(self):
+        with tempfile.TemporaryDirectory() as directory:
+            def unreadable(*args, **kwargs):
+                kwargs['onerror'](PermissionError('controlled unreadable directory'))
+            with patch('deeppurge.discovery.os.walk', side_effect=unreadable):
+                with self.assertRaises(PermissionError):
+                    scan_desktops((Path(directory),))
+
+    def test_failed_capability_creates_an_inventory_warning(self):
+        from unittest.mock import Mock
+        registry = {key: Mock() for key in ('flatpak', 'snap', 'deb', 'appimage', 'local')}
+        for backend in registry.values():
+            backend.capability.return_value = Capability(True, True, 'Fixture available')
+            backend.discover.return_value = ()
+        registry['snap'].capability.return_value = Capability(False, False, 'Daemon unreachable', scan_failed=True)
+        with patch('deeppurge.discovery.scan_desktops', return_value=()), patch(
+                'deeppurge.discovery.package_owners', return_value={}):
+            inventory = scan(registry)
+        self.assertIn('snap: Daemon unreachable', inventory.warnings)
+        self.assertTrue(inventory.capabilities['snap'].scan_failed)
+        registry['snap'].discover.assert_not_called()
     def test_hidden_user_override_masks_system_entry(self):
         with tempfile.TemporaryDirectory() as directory:
             user, system = Path(directory) / 'user', Path(directory) / 'system'

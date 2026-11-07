@@ -29,13 +29,14 @@ def main():
         ('Document Viewer', 'org.example.Documents', 'Flatpak', 'flatpak', 'user', 'org.gnome.Evince'),
         ('Files', 'org.example.Files', 'APT/Deb', 'deb', 'system', 'org.gnome.Nautilus'),
         ('Local workspace', 'example-workspace', 'Custom/Local', 'local', 'user shortcut', 'folder-development'),
-        ('Music', 'example-music', 'Snap', 'snap', 'system', 'audio-x-generic'),
+        ('Desktop Platform', 'example-platform', 'Snap', 'snap', 'system', 'applications-system'),
         ('Notes', 'org.example.Notes', 'Flatpak', 'flatpak', 'user', 'accessories-text-editor'),
         ('Text Editor', 'org.example.TextEditor', 'APT/Deb', 'deb', 'system', 'org.gnome.TextEditor'),
     )
     apps = tuple(Application(str(index), backend, name, identifier, kind, scope=scope,
                              arch='x86_64' if backend == 'flatpak' else '',
-                             branch='stable' if backend == 'flatpak' else '', icon=icon)
+                             branch='stable' if backend == 'flatpak' else '', icon=icon,
+                             protected=identifier == 'example-platform')
                  for index, (name, identifier, kind, backend, scope, icon) in enumerate(fixtures))
     capabilities = {key: Capability(True, True, 'Layout fixture — not a real installation')
                     for key in ('flatpak', 'snap', 'deb', 'appimage', 'local')}
@@ -64,7 +65,7 @@ def main():
         pixbuf.savev(str(destination / name), 'png', [], [])
 
     with tempfile.TemporaryDirectory(prefix='deeppurge-capture-') as directory, patch.dict(
-            'os.environ', {'XDG_STATE_HOME': directory}), patch('deeppurge.app.scan', return_value=inventory):
+            'os.environ', {'XDG_STATE_HOME': directory}), patch('deeppurge.app.scan', return_value=inventory) as inventory_scan:
         window = Dashboard(application, history=History())
         Gdk.Display.get_default().get_default_seat().get_pointer().warp(Gdk.Screen.get_default(), 0, 0)
         settle(1)
@@ -76,6 +77,15 @@ def main():
         window.search.set_text('no-matching-layout-fixture'); window.filter_changed()
         capture(window, 'empty-search.png')
         window.clear_filters(); settle()
+        failed_capabilities = dict(capabilities)
+        failed_capabilities['snap'] = Capability(False, False, 'Controlled screenshot fixture: snapd unavailable', True)
+        inventory_scan.return_value = Inventory(tuple(app for app in apps if app.backend != 'snap'),
+            failed_capabilities, ('snap: Controlled screenshot fixture: snapd unavailable',))
+        window.refresh(); settle(1)
+        assert window.scan_notice.get_visible()
+        capture(window, 'incomplete-scan.png')
+        inventory_scan.return_value = inventory
+        window.refresh(); settle(1)
         window.activity_tab.set_active(True)
         capture(window, 'activity.png')
         window.applications_tab.set_active(True); settle()
@@ -100,7 +110,7 @@ def main():
         window.details_dialog(preview)
         window.destroy()
     application.quit()
-    print('Captured six GTK states with clearly documented inventory fixtures:', destination)
+    print('Captured seven GTK states with clearly documented inventory fixtures:', destination)
 
 
 if __name__ == '__main__':

@@ -21,6 +21,8 @@ user's installed-app inventory. They are real GTK window captures, not mockups.
   scopes and format badges. Relative font sizing lets cards grow with larger text.
 - Search, format filters, alphabetical sorting, refresh and accurate filtered counts.
 - Background discovery, a bounded worker pool, batched GTK updates and backend status.
+- Visible Retry/Details notices for failed sources, explicit partial-scan counts,
+  and Protected, Unverified or Shortcut captions on entries with limited actions.
 - Native uninstall previews, serialized operations, real status updates, backend
   verification and persistent Activity history.
 - Separate, unchecked-by-default cleanup of verified locations using recoverable Trash.
@@ -69,6 +71,12 @@ The verified checkout location is `/home/home/DeepPurge-Ultra`. Use
 bindings. Run as your regular user, without `sudo`; the GUI refuses root execution.
 The entry point filters incompatible GTK loaders and schema directories inherited
 from Snap-packaged editors when using the system interpreter.
+
+A failed scan is not presented as an empty installation list. If a whole refresh
+fails, previous results remain visible with removal disabled until a successful
+retry. A failed source is marked **Scan failed**; missing optional tools remain
+**Unavailable**. Corrupt Activity records do not block application inventory or
+replace a verified backend result. Other persistence failures are reported separately.
 
 Keyboard shortcuts: **Ctrl+F** focuses search, **Ctrl+R** refreshes inventory,
 **Escape** clears a focused search, and **Tab/Shift+Tab** navigate controls.
@@ -150,6 +158,7 @@ Trash view; restoring application binaries does not reinstall managed packages.
 - [Larger text](docs/screenshots/large-text.png)
 - [Uninstall details](docs/screenshots/uninstall-details.png)
 - [Empty search](docs/screenshots/empty-search.png)
+- [Incomplete scan and retry notice](docs/screenshots/incomplete-scan.png)
 - [Activity](docs/screenshots/activity.png)
 
 The [artwork notes](assets/illustrations/README.md) include the original generation
@@ -185,6 +194,9 @@ authentication have not been destructively integration-tested on this desktop.
 Adapter tests cover failure and cancellation reporting. See
 [verification evidence](docs/verification.md) and
 [implementation decisions with official references](docs/implementation.md).
+The [engineering review](docs/review-2026-11-07.md) separates confirmed defects,
+remaining risks and deferred improvements. Private live-inventory screenshots
+are kept under ignored `artifacts/local/`; the public captures use fixture data.
 
 Regenerate the fixture screenshots:
 
@@ -214,7 +226,8 @@ Logs and the latest 200 Activity records live under
 `$XDG_STATE_HOME/deep-purge-ultra`, defaulting to
 `~/.local/state/deep-purge-ultra`, outside the source tree. The directory also
 holds the operation lock. These files are local runtime state and are excluded
-from Git.
+from Git. Activity writes use exclusively created temporary files and atomic
+replacement. Shared, symbolic-link and non-regular state files are refused.
 
 ## Version-one boundaries
 

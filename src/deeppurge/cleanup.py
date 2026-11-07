@@ -72,7 +72,8 @@ def leftover_candidates(app: Application) -> tuple[tuple[CleanupCandidate, ...],
     if app.backend == "flatpak":
         paths.append((Path.home() / ".var/app" / app.identifier,
                       Path.home() / ".var/app",
-                      "Flatpak's per-application sandbox data, configuration and cache"))
+                      "Flatpak's sandbox data, configuration and cache. Shared by all refs "
+                      "with this app ID; cleanup is blocked while any installation remains."))
     elif app.backend == "appimage" and app.executable:
         for suffix, explanation in ((".home", "AppImage portable home and personal data"),
                                     (".config", "AppImage portable configuration")):
@@ -84,7 +85,12 @@ def leftover_candidates(app: Application) -> tuple[tuple[CleanupCandidate, ...],
         if not os.path.lexists(path):
             continue
         try:
-            found.append(candidate(path, root, reason))
+            item = candidate(path, root, reason)
+            if stat.S_ISLNK(item.identity[2]):
+                item = CleanupCandidate(item.path, item.root, item.reason +
+                    " Symbolic link: only the link moves to Trash; its destination is retained.",
+                    item.identity, item.parent_identity)
+            found.append(item)
         except (OSError, ValueError) as error:
             notes.append(str(error))
     notes.append("Other configuration, cache, data and state directories are retained unless their ownership is verified.")

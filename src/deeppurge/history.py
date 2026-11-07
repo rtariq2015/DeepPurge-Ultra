@@ -9,8 +9,13 @@ from logging.handlers import RotatingFileHandler
 import os
 from pathlib import Path
 import stat
+import tempfile
 
 from .cleanup import xdg_path
+
+
+class OperationBusyError(BlockingIOError):
+    """Another process owns the operation lock; no backend action was started."""
 
 
 def state_directory() -> Path:
@@ -23,12 +28,20 @@ def state_directory() -> Path:
 
 
 def secure_open(path: Path, flags: int):
-    descriptor = os.open(path, flags | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
-    info = os.fstat(descriptor)
-    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+    # Validate before a requested truncation and never block on an unexpected FIFO.
+    descriptor = os.open(path, (flags & ~os.O_TRUNC) | os.O_NOFOLLOW |
+                         os.O_CLOEXEC | os.O_NONBLOCK, 0o600)
+    try:
+        info = os.fstat(descriptor)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                or info.st_nlink != 1):
+            raise OSError(f"Refusing an unsafe state file: {path}")
+        if flags & os.O_TRUNC:
+            os.ftruncate(descriptor, 0)
+        return descriptor
+    except BaseException:
         os.close(descriptor)
-        raise OSError(f"Refusing an unsafe state file: {path}")
-    return descriptor
+        raise
 
 
 class History:
@@ -38,7 +51,7 @@ class History:
     def read(self) -> list[dict]:
         path = self.root / "activity.jsonl"
         try:
-            with os.fdopen(secure_open(path, os.O_RDONLY), encoding="utf-8") as stream:
+            with os.fdopen(secure_open(path, os.O_RDONLY), encoding="utf-8", errors="replace") as stream:
                 entries = []
                 for line in stream:
                     try:
@@ -59,20 +72,26 @@ class History:
             "app": app_name, "action": action, "status": result.status,
             "summary": result.summary, "details": list(result.details),
         })
-        temporary = self.root / "activity.new"
-        with os.fdopen(secure_open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC),
-                       "w", encoding="utf-8") as stream:
-            for entry in entries[-200:]:
-                stream.write(json.dumps(entry, ensure_ascii=False) + "\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        temporary.replace(self.root / "activity.jsonl")
+        descriptor, filename = tempfile.mkstemp(prefix=".activity-", suffix=".tmp", dir=self.root)
+        temporary = Path(filename)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                for entry in entries[-200:]:
+                    stream.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            temporary.replace(self.root / "activity.jsonl")
+        finally:
+            temporary.unlink(missing_ok=True)
 
     @contextmanager
     def operation_lock(self):
         descriptor = secure_open(self.root / "operation.lock", os.O_CREAT | os.O_RDWR)
         try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as error:
+                raise OperationBusyError("Another DeepPurge operation owns the lock") from error
             yield
         finally:
             os.close(descriptor)

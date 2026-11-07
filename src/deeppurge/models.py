@@ -36,6 +36,7 @@ class Capability:
     available: bool
     can_remove: bool
     detail: str
+    scan_failed: bool = False
 
 
 @dataclass(frozen=True)

@@ -15,7 +15,7 @@ from . import __version__
 from .backends import backend_registry
 from .cleanup import clean_selected, leftover_candidates
 from .discovery import scan
-from .history import History, configure_logging
+from .history import History, OperationBusyError, configure_logging
 from .models import FORMATS, Inventory, OperationResult
 
 LOG = logging.getLogger(__name__)
@@ -96,8 +96,12 @@ class AppCard(Gtk.Button):
         self.set_size_request(240, 110)
         self.set_hexpand(True)
         styled(self, 'app-card')
-        self.set_tooltip_text(f'{app.name}\n{app.identifier}\n{app.format} · {app.scope}\n{app.arch} {app.branch}')
-        self.get_accessible().set_name(f'{app.name}, {app.format}, {app.scope}. Review removal')
+        caption = ('Protected' if app.protected else
+                   'Unverified' if app.backend in {'local', 'appimage'} and not app.identity else
+                   'Shortcut' if app.backend == 'local' else app.scope)
+        self.set_tooltip_text(f'{app.name}\n{app.identifier}\n{app.format} · {app.scope}'
+                              f'\n{app.arch} {app.branch}\n{caption}: open details to review supported actions')
+        self.get_accessible().set_name(f'{app.name}, {app.format}, {app.scope}, {caption}. Review details')
         box = column(8)
         top = Gtk.Box(spacing=11)
         top.pack_start(app_icon(app), False, False, 0)
@@ -113,7 +117,7 @@ class AppCard(Gtk.Button):
         bottom = Gtk.Box(spacing=8)
         badge = styled(Gtk.Label(label=app.format), 'badge', f'badge-{FORMATS[app.format][0]}')
         bottom.pack_start(badge, False, False, 0)
-        scope = label(app.scope, 'muted', 'small')
+        scope = label(caption, 'warning' if caption in {'Protected', 'Unverified'} else 'muted', 'small')
         scope.set_ellipsize(Pango.EllipsizeMode.END)
         scope.set_max_width_chars(13)
         bottom.pack_end(scope, False, False, 0)
@@ -132,6 +136,10 @@ class Dashboard(Gtk.ApplicationWindow):
         self.entries, self.cards = [], []
         self.generation = 0
         self.closed = self.scanning = self.operation_active = self.preparing = False
+        self.scan_error = self.history_warning = None
+        self.notice_messages = ()
+        self.narrow_layout = None
+        self.layout_source = None
         self.set_default_size(1120, 840)
         self.set_size_request(360, 420)
         self.set_icon_name('system-software-install')
@@ -179,6 +187,8 @@ class Dashboard(Gtk.ApplicationWindow):
         title_row = Gtk.Box(spacing=12)
         title_row.pack_start(label('Applications', 'page-title'), True, True, 0)
         self.count = label('Scanning…', 'muted', 'small')
+        self.count.set_ellipsize(Pango.EllipsizeMode.END)
+        self.count.set_max_width_chars(30)
         title_row.pack_end(self.count, False, False, 0)
         page.pack_start(title_row, False, False, 0)
         hero = styled(Gtk.Box(spacing=16), 'hero')
@@ -213,6 +223,25 @@ class Dashboard(Gtk.ApplicationWindow):
         self.backend_status = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE,
             min_children_per_line=1, max_children_per_line=5, column_spacing=6, row_spacing=6, homogeneous=True)
         page.pack_start(self.backend_status, False, False, 0)
+        self.scan_notice = column(0)
+        notice = styled(Gtk.Box(spacing=10), 'scan-notice')
+        notice.pack_start(Gtk.Image.new_from_icon_name('dialog-warning-symbolic', Gtk.IconSize.BUTTON),
+                          False, False, 0)
+        notice_text = column(5)
+        self.notice_title = label('', 'app-name', wrap=True)
+        self.notice_hint = label('', 'muted', 'small', wrap=True)
+        notice_text.pack_start(self.notice_title, False, False, 0)
+        notice_text.pack_start(self.notice_hint, False, False, 0)
+        notice.pack_start(notice_text, True, True, 0)
+        details = Gtk.Button(label='Details', valign=Gtk.Align.CENTER)
+        details.connect('clicked', lambda *_args: self.show_message(
+            self.notice_title.get_text(), '\n\n'.join(self.notice_messages), Gtk.MessageType.WARNING))
+        retry = Gtk.Button(label='Retry', valign=Gtk.Align.CENTER)
+        retry.connect('clicked', lambda *_args: self.refresh())
+        notice.pack_end(retry, False, False, 0)
+        notice.pack_end(details, False, False, 0)
+        self.scan_notice.pack_start(notice, False, False, 0)
+        page.pack_start(self.scan_notice, False, False, 0)
         # GTK3 crossfade snapshots can draw unallocated flow children when a
         # resize and a filter update arrive together. Cards keep CSS transitions.
         self.grid_stack = Gtk.Stack()
@@ -257,11 +286,23 @@ class Dashboard(Gtk.ApplicationWindow):
 
     def on_size(self, _widget, allocation):
         narrow = allocation.width < 650
-        self.hero_art.set_visible(not narrow)
-        margin = 14 if narrow else 24
-        if self.layout.get_margin_start() != margin:
-            self.layout.set_margin_start(margin)
-            self.layout.set_margin_end(margin)
+        if narrow == self.narrow_layout:
+            return
+        self.narrow_layout = narrow
+        if self.layout_source is not None:
+            return
+        def apply_layout():
+            self.layout_source = None
+            if not self.closed:
+                self.hero_art.set_visible(not self.narrow_layout)
+                margin = 14 if self.narrow_layout else 24
+                self.layout.set_margin_start(margin)
+                self.layout.set_margin_end(margin)
+                self.queue_resize()
+            return GLib.SOURCE_REMOVE
+        # Changing visibility inside size-allocate can leave GTK3 descendants
+        # with stale allocations. Apply the latest breakpoint after that pass.
+        self.layout_source = GLib.idle_add(apply_layout)
 
     def on_key(self, _widget, event):
         if event.state & Gdk.ModifierType.CONTROL_MASK:
@@ -285,6 +326,9 @@ class Dashboard(Gtk.ApplicationWindow):
 
     def on_destroy(self, *_args):
         self.closed = True
+        if self.layout_source is not None:
+            GLib.source_remove(self.layout_source)
+            self.layout_source = None
         self.generation += 1
         self.jobs.shutdown(wait=False, cancel_futures=True)
 
@@ -309,34 +353,43 @@ class Dashboard(Gtk.ApplicationWindow):
     def controls_enabled(self):
         enabled = not (self.scanning or self.operation_active or self.preparing)
         self.refresh_button.set_sensitive(enabled)
-        self.flow.set_sensitive(enabled)
+        self.flow.set_sensitive(enabled and not self.scan_error)
+        self.scan_notice.set_sensitive(enabled)
         self.spinner.stop() if enabled else self.spinner.start()
 
     def refresh(self):
         if self.scanning or self.operation_active or self.preparing or self.closed:
             return
         self.scanning = True
+        self.scan_error = None
+        self.scan_notice.hide()
         self.generation += 1
         generation = self.generation
         self.controls_enabled()
         self.status.set_text('Scanning native package backends and desktop entries…')
+        previous_entries = list(self.entries)
         def work():
             inventory = scan(self.registry)
+            history_error = None
             try:
                 entries = self.history.read()
-            except OSError:
-                entries = []
-            return inventory, entries
+            except Exception as problem:
+                LOG.warning('Activity read failed: %s', problem)
+                entries, history_error = previous_entries, str(problem)
+            return inventory, entries, history_error
         def complete(value, error):
             if generation != self.generation:
                 return
             if error:
                 self.scanning = False
+                self.scan_error = error
                 self.controls_enabled()
                 self.status.set_text(f'Scan failed: {error}')
                 self.status.set_tooltip_text(error)
+                self.update_notice()
+                self.filter_changed()
                 return
-            self.inventory, self.entries = value
+            self.inventory, self.entries, self.history_warning = value
             self.render_activity()
             self.render_capabilities()
             for child in self.flow.get_children():
@@ -359,8 +412,9 @@ class Dashboard(Gtk.ApplicationWindow):
             self.scanning = False
             self.controls_enabled()
             self.filter_changed()
+            self.update_notice()
             warnings = self.inventory.warnings
-            self.status.set_text(f'Scan completed with {len(warnings)} warning(s). Hover for details.' if warnings
+            self.status.set_text(f'Inventory is incomplete: {len(warnings)} source warning(s). See Details above.' if warnings
                                  else 'Select an application to review removal.')
             self.status.set_tooltip_text('\n'.join(warnings) or 'All discovered sources were processed.')
         return GLib.SOURCE_REMOVE
@@ -373,13 +427,37 @@ class Dashboard(Gtk.ApplicationWindow):
             capability = self.inventory.capabilities.get(key)
             if capability is None:
                 continue
-            state = 'Ready' if capability.can_remove else 'Read only' if capability.available else 'Unavailable'
+            state = ('Scan failed' if capability.scan_failed else 'Ready' if capability.can_remove
+                     else 'Read only' if capability.available else 'Unavailable')
             pill = styled(Gtk.Label(label=f'{names[key]} · {state}'), 'backend-pill')
             if not capability.can_remove:
                 styled(pill, 'backend-unavailable')
             pill.set_tooltip_text(capability.detail)
             self.backend_status.add(pill)
         self.backend_status.show_all()
+
+    def update_notice(self):
+        messages = list(self.inventory.warnings)
+        if self.history_warning:
+            messages.append(f'Activity history: {self.history_warning}')
+        if self.scan_error:
+            messages.insert(0, self.scan_error)
+            title = 'Refresh failed'
+            hint = 'Previous results are retained. Retry before selecting a removal action.'
+        elif self.inventory.warnings:
+            title = 'Inventory is incomplete'
+            hint = 'Some applications could not be checked. View details or retry the scan.'
+        else:
+            title = 'Activity history is unavailable'
+            hint = 'The application inventory is available. Operation results will still be reported.'
+        self.notice_messages = tuple(messages)
+        self.notice_title.set_text(title)
+        self.notice_hint.set_text(hint)
+        self.scan_notice.set_visible(bool(messages))
+        # Recompute the top-level layout after replacing flow children or
+        # changing the notice height; newly inserted cards must be allocated.
+        self.queue_resize()
+        self.queue_draw()
 
     def card_visible(self, child):
         card = child.get_child()
@@ -396,12 +474,22 @@ class Dashboard(Gtk.ApplicationWindow):
         self.flow.invalidate_filter()
         matches = sum(self.card_visible(card.get_parent()) for card in self.cards)
         total = len(self.inventory.apps)
-        self.count.set_text(f'{matches} of {total} applications')
+        count = f'{matches} of {total} applications'
+        if self.scan_error:
+            count = f'{matches} previous results'
+        elif self.inventory.warnings:
+            count = f'{matches} of {total} available · partial scan'
+        self.count.set_text(count)
+        self.count.set_tooltip_text(count)
         self.grid_stack.set_visible_child_name('grid' if matches else 'empty')
         if not matches and not self.scanning:
-            self.empty_title.set_text('No matching applications' if total else 'No applications found')
-            self.empty_hint.set_text('Try another search or clear the format filter.' if total else
-                                     'Refresh to scan again. Backend availability is shown above.')
+            if self.scan_error or (not total and self.inventory.warnings):
+                self.empty_title.set_text('Applications could not be checked')
+                self.empty_hint.set_text('Application sources could not be read. View Details and retry.')
+            else:
+                self.empty_title.set_text('No matching applications' if total else 'No applications found')
+                self.empty_hint.set_text('Try another search or clear the format filter.' if total else
+                                         'No applications were found in the available sources. Try refreshing.')
 
     def clear_filters(self):
         self.search.set_text('')
@@ -417,7 +505,8 @@ class Dashboard(Gtk.ApplicationWindow):
             card = styled(column(8), 'activity-card')
             status = str(entry.get('status', 'unknown'))
             card.pack_start(label(f"{entry.get('app', 'Application')} · {entry.get('action', '')}", 'app-name', wrap=True), False, False, 0)
-            card.pack_start(label(str(entry.get('summary', '')), 'success' if status == 'success' else 'warning', wrap=True), False, False, 0)
+            tone = {'success': 'success', 'failed': 'error', 'cancelled': 'muted'}.get(status, 'warning')
+            card.pack_start(label(str(entry.get('summary', '')), tone, wrap=True), False, False, 0)
             card.pack_start(label(f"{entry.get('time', '')} · {status}", 'muted', 'small', wrap=True), False, False, 0)
             details = entry.get('details', [])
             if isinstance(details, list) and details:
@@ -510,18 +599,29 @@ class Dashboard(Gtk.ApplicationWindow):
         self.operation_active = True
         self.controls_enabled()
         self.status.set_text(f'{action}: {app.name}…')
+        previous_entries = list(self.entries)
         def work():
-            with self.history.operation_lock():
-                result = function()
-                try:
-                    self.history.append(app.name, action, result)
-                except OSError as error:
-                    result = replace(result, details=result.details + (f'Activity could not be saved: {error}',))
-                try:
-                    entries = self.history.read()
-                except OSError:
-                    entries = self.entries
-                return result, entries
+            try:
+                with self.history.operation_lock():
+                    result = function()
+                    issues = []
+                    try:
+                        self.history.append(app.name, action, result)
+                    except Exception as problem:
+                        LOG.warning('Activity save failed: %s', problem)
+                        issues.append(f'Activity could not be saved: {problem}')
+                    try:
+                        entries = self.history.read()
+                    except Exception as problem:
+                        LOG.warning('Activity read failed: %s', problem)
+                        entries = previous_entries
+                        issues.append(f'Activity could not be read: {problem}')
+                    if issues:
+                        result = replace(result, details=result.details + tuple(issues))
+                    return result, entries, '\n'.join(issues) or None
+            except OperationBusyError:
+                return (OperationResult('failed', 'Another DeepPurge operation is already running.',
+                    ('Wait for the other operation to finish before retrying.',)), previous_entries, None)
         def complete(value, error):
             self.operation_active = False
             self.controls_enabled()
@@ -529,8 +629,9 @@ class Dashboard(Gtk.ApplicationWindow):
             if error:
                 result = OperationResult('unverified', 'Operation did not produce a verified result.', (error,))
             else:
-                result, self.entries = value
+                result, self.entries, self.history_warning = value
                 self.render_activity()
+                self.update_notice()
             self.status.set_text(result.summary)
             self.status.set_tooltip_text('\n'.join(result.details) or result.summary)
             callback(result)

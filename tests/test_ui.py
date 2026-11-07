@@ -72,6 +72,99 @@ class UITests(unittest.TestCase):
                                   state=self.Gdk.ModifierType.CONTROL_MASK)))
         self.assertTrue(window.applications_tab.get_active())
 
+    def test_failed_inventory_is_not_presented_as_no_installed_apps(self):
+        from deeppurge.models import Capability, Inventory
+        window = self.window
+        window.inventory = Inventory((), {'snap': Capability(False, False, 'Fixture outage', True)},
+                                     ('snap: Fixture outage',))
+        for child in window.flow.get_children():
+            window.flow.remove(child)
+        window.cards = []
+        window.render_capabilities(); window.filter_changed(); window.update_notice()
+        self.assertEqual(window.empty_title.get_text(), 'Applications could not be checked')
+        self.pump(lambda: window.scan_notice.get_mapped() and window.scan_notice.get_allocated_height() > 5)
+        self.assertIn('partial scan', window.count.get_text())
+        self.assertEqual(window.backend_status.get_children()[0].get_child().get_text(), 'Snap · Scan failed')
+
+    def test_failed_refresh_preserves_previous_results_and_requires_successful_retry(self):
+        window = self.window
+        original = window.inventory
+        with patch('deeppurge.app.scan', side_effect=RuntimeError('Fixture inventory failure')):
+            window.refresh()
+            self.pump(lambda: not window.scanning)
+        self.assertEqual(tuple(card.app.key for card in window.cards), tuple(app.key for app in original.apps))
+        self.assertFalse(window.flow.get_sensitive())
+        self.assertTrue(window.refresh_button.get_sensitive())
+        self.assertTrue(window.scan_notice.get_visible())
+        self.assertEqual(window.notice_title.get_text(), 'Refresh failed')
+        with patch('deeppurge.app.scan', return_value=original):
+            window.refresh()
+            self.pump(lambda: not window.scanning)
+        self.assertIsNone(window.scan_error)
+        self.assertTrue(window.flow.get_sensitive())
+        self.assertFalse(window.scan_notice.get_visible())
+
+    def test_resize_then_refresh_allocates_new_cards_and_the_failure_notice(self):
+        from dataclasses import replace
+        window = self.window
+        window.resize(480, 850)
+        self.pump(lambda: window.get_allocated_width() < 650 and not window.hero_art.get_visible())
+        window.resize(1120, 840)
+        partial = replace(window.inventory, warnings=('Fixture source unavailable',))
+        with patch('deeppurge.app.scan', return_value=partial):
+            window.refresh()
+            self.pump(lambda: not window.scanning and window.hero_art.get_visible() and
+                window.scan_notice.get_allocated_height() > 5 and
+                all(card.get_allocated_width() >= 240 and card.get_allocated_height() >= 110
+                    for card in window.cards))
+        self.assertTrue(window.scan_notice.get_mapped())
+        self.assertTrue(all(card.get_mapped() for card in window.cards))
+
+    def test_history_failure_cannot_replace_a_verified_operation_result(self):
+        from deeppurge.models import OperationResult
+        result = OperationResult('success', 'Fixture operation independently verified', removed=True)
+        received = []
+        with patch.object(self.window.history, 'append', side_effect=ValueError('Fixture history failure')), patch.object(
+                self.window.history, 'read', side_effect=UnicodeError('Fixture read failure')):
+            self.window.run_operation(self.window.cards[0].app, 'Fixture action', lambda: result, received.append)
+            self.pump(lambda: bool(received))
+        self.assertEqual(received[0].status, 'success')
+        self.assertTrue(received[0].removed)
+        self.assertIn('Activity could not be saved', '\n'.join(received[0].details))
+        self.assertIn('Activity could not be read', '\n'.join(received[0].details))
+        self.assertEqual(self.window.notice_title.get_text(), 'Activity history is unavailable')
+
+    def test_locked_operation_does_not_call_the_backend(self):
+        from unittest.mock import Mock
+        backend_action, received = Mock(), []
+        with self.window.history.operation_lock():
+            self.window.run_operation(self.window.cards[0].app, 'Fixture action', backend_action, received.append)
+            self.pump(lambda: bool(received))
+        backend_action.assert_not_called()
+        self.assertEqual(received[0].status, 'failed')
+        self.assertIn('already running', received[0].summary)
+
+    def test_backend_io_error_is_not_mislabelled_as_a_busy_operation_lock(self):
+        from unittest.mock import Mock
+        received = []
+        backend_action = Mock(side_effect=BlockingIOError('Fixture backend I/O failure'))
+        self.window.run_operation(self.window.cards[0].app, 'Fixture action', backend_action, received.append)
+        self.pump(lambda: bool(received))
+        self.assertEqual(received[0].status, 'unverified')
+        self.assertNotIn('already running', received[0].summary)
+        self.assertIn('Fixture backend I/O failure', '\n'.join(received[0].details))
+
+    def test_unavailable_flatpak_blocks_leftover_selection(self):
+        from deeppurge.backends import FlatpakBackend
+        self.window.registry['flatpak'] = FlatpakBackend()
+        with patch('deeppurge.backends.shutil.which', return_value=None), patch.object(
+                self.window, 'show_message') as message, patch.object(self.window, 'cleanup_dialog') as cleanup, patch.object(
+                self.window, 'refresh'):
+            self.window.inspect_leftovers(self.window.cards[0].app)
+            self.pump(lambda: not self.window.preparing)
+        message.assert_called_once()
+        cleanup.assert_not_called()
+
     def test_refresh_generation_shutdown_and_busy_close(self):
         window = self.window
         generation = window.generation

@@ -31,6 +31,9 @@ flowboxchild { padding: 0; background: transparent; }
 .badge-local { background: #c42944; }
 .backend-pill { color: #c4cce0; background: #232838; border: 1px solid #373f54; border-radius: 6px; padding: 5px 9px; font-size: 0.77em; }
 .backend-unavailable { color: #e9bf9a; border-color: #7f5f48; }
+.scan-notice { background: #30242f; border: 1px solid #80526d; border-radius: 8px; padding: 12px; }
+.scan-notice image { color: #f3c99b; }
+.app-card:disabled { background-color: #1a1e29; border-color: #303647; box-shadow: none; }
 .status-panel { background: #1c2130; border: 1px solid #354057; border-radius: 8px; padding: 10px 14px; }
 .activity-card { background: #202431; border: 1px solid #343b4e; border-radius: 8px; padding: 16px; }
 .success { color: #8cdbb7; }

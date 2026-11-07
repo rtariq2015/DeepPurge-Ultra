@@ -8,7 +8,7 @@ from deeppurge.models import Application, Capability, Preview
 
 class BackendTests(unittest.TestCase):
     def test_flatpak_distinct_scopes_architectures_and_branches(self):
-        output = "org.example.App/x86_64/stable\tApp\tuser\norg.example.App/x86_64/stable\tApp\tsystem\norg.example.App/aarch64/beta\tApp Beta\tlab\n--bad/x86_64/stable\tBad\tuser\n"
+        output = "org.example.App/x86_64/stable\tApp\tuser\norg.example.App/x86_64/stable\tApp\tsystem\norg.example.App/aarch64/beta\tApp Beta\tlab\n"
         with patch('deeppurge.backends.shutil.which', return_value='/usr/bin/flatpak'), patch(
                 'deeppurge.backends.command', return_value=subprocess.CompletedProcess([], 0, output)):
             apps = FlatpakBackend().discover()
@@ -19,7 +19,34 @@ class BackendTests(unittest.TestCase):
     def test_missing_flatpak(self):
         with patch('deeppurge.backends.shutil.which', return_value=None):
             self.assertFalse(FlatpakBackend().capability().can_remove)
-            self.assertEqual(FlatpakBackend().discover(), ())
+            with self.assertRaises(BackendError):
+                FlatpakBackend().discover()
+
+    def test_flatpak_verification_cannot_succeed_after_tool_disappears(self):
+        app = Application('flatpak:user:org.example.App/x86_64/stable', 'flatpak',
+            'App', 'org.example.App', 'Flatpak', scope='user', arch='x86_64', branch='stable')
+        preview = Preview(app, 'Uninstall', ('fixture',), '')
+        backend = FlatpakBackend()
+        with patch.object(backend, 'prepare', return_value=preview), patch.object(backend, 'remove'), patch(
+                'deeppurge.backends.shutil.which', return_value=None):
+            result = backend.uninstall(preview, lambda *_: None)
+        self.assertEqual(result.status, 'unverified')
+        self.assertFalse(result.removed)
+
+    def test_malformed_flatpak_inventory_never_establishes_absence(self):
+        for output in ('incomplete row\n', '--bad/x86_64/stable\tBad\tuser\n',
+                       'org.example.App/x86_64/stable\tApp\t--invalid\n'):
+            with self.subTest(output=output), patch('deeppurge.backends.shutil.which', return_value='flatpak'), patch(
+                    'deeppurge.backends.command', return_value=subprocess.CompletedProcess([], 0, output)):
+                with self.assertRaises(BackendError):
+                    FlatpakBackend().discover()
+
+    def test_snap_service_failure_is_distinct_from_missing_optional_backend(self):
+        with patch('deeppurge.backends.Path.exists', return_value=True), patch.object(
+                SnapBackend, 'request', side_effect=OSError('daemon unreachable')):
+            capability = SnapBackend().capability()
+        self.assertTrue(capability.scan_failed)
+        self.assertFalse(capability.available)
 
     def test_flatpak_exact_removal_arguments_preserve_data(self):
         app = Application('key', 'flatpak', 'App', 'org.example.App', 'Flatpak',
